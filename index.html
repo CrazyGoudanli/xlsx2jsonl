@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XLSX 转 JSONL 转换器</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --card-bg: #ffffff;
+    --border: #e2e2e5;
+    --text: #1f1f23;
+    --muted: #6b6b74;
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --success: #16a34a;
+    --error: #dc2626;
+    --code-bg: #f1f1f4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 32px 16px;
+  }
+  .container {
+    max-width: 780px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+  p.subtitle {
+    color: var(--muted);
+    margin-top: 0;
+    margin-bottom: 24px;
+    font-size: 14px;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .drop-zone.dragover {
+    border-color: var(--accent);
+    background: #f5f4ff;
+  }
+  .drop-zone p {
+    margin: 4px 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .drop-zone .filename {
+    color: var(--text);
+    font-weight: 500;
+  }
+  input[type="file"] { display: none; }
+  .field-row {
+    display: flex;
+    gap: 16px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+  }
+  .field {
+    flex: 1;
+    min-width: 160px;
+  }
+  .field label {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #fff;
+    font-size: 14px;
+    color: var(--text);
+  }
+  button {
+    appearance: none;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled {
+    background: #c7c5f5;
+    cursor: not-allowed;
+  }
+  .actions {
+    margin-top: 20px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .status {
+    font-size: 13px;
+    margin-top: 10px;
+  }
+  .status.error { color: var(--error); }
+  .status.success { color: var(--success); }
+  pre {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    max-height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .hidden { display: none; }
+  .row-count {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>XLSX 转 JSONL 转换器</h1>
+  <p class="subtitle">上传 Excel 表格，按选定的列生成对话格式的 JSONL 文件（每行一个 messages 数组）。所有处理均在浏览器本地完成，不会上传到任何服务器。</p>
+
+  <div class="card">
+    <div class="drop-zone" id="dropZone">
+      <p class="filename" id="fileNameDisplay">点击选择文件，或将 .xlsx 文件拖拽到此处</p>
+      <p>支持 .xlsx / .xls / .csv</p>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+
+    <div class="field-row hidden" id="mappingRow">
+      <div class="field">
+        <label for="sheetSelect">工作表</label>
+        <select id="sheetSelect"></select>
+      </div>
+      <div class="field">
+        <label for="userCol">user 列（对应表头）</label>
+        <select id="userCol"></select>
+      </div>
+      <div class="field">
+        <label for="assistantCol">assistant 列（对应表头）</label>
+        <select id="assistantCol"></select>
+      </div>
+    </div>
+
+    <div class="actions hidden" id="actionsRow">
+      <button class="btn-primary" id="convertBtn">生成 JSONL</button>
+      <button class="btn-primary" id="downloadBtn" disabled>下载 .jsonl</button>
+    </div>
+
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card hidden" id="previewCard">
+    <div class="row-count" id="rowCount"></div>
+    <pre id="preview"></pre>
+  </div>
+</div>
+
+<script>
+let workbook = null;
+let currentFileName = 'converted';
+let jsonlText = '';
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const fileNameDisplay = document.getElementById('fileNameDisplay');
+const mappingRow = document.getElementById('mappingRow');
+const actionsRow = document.getElementById('actionsRow');
+const sheetSelect = document.getElementById('sheetSelect');
+const userCol = document.getElementById('userCol');
+const assistantCol = document.getElementById('assistantCol');
+const convertBtn = document.getElementById('convertBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const statusEl = document.getElementById('status');
+const previewCard = document.getElementById('previewCard');
+const previewEl = document.getElementById('preview');
+const rowCountEl = document.getElementById('rowCount');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
+
+function setStatus(msg, type) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (type ? ' ' + type : '');
+}
+
+function handleFile(file) {
+  currentFileName = file.name.replace(/\.[^/.]+$/, '');
+  fileNameDisplay.textContent = file.name;
+  setStatus('正在解析文件…');
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      workbook = XLSX.read(data, { type: 'array' });
+      populateSheetSelect();
+      mappingRow.classList.remove('hidden');
+      actionsRow.classList.remove('hidden');
+      downloadBtn.disabled = true;
+      previewCard.classList.add('hidden');
+      setStatus('文件解析成功，请确认列映射后点击"生成 JSONL"。', 'success');
+    } catch (err) {
+      setStatus('解析失败：' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function populateSheetSelect() {
+  sheetSelect.innerHTML = '';
+  workbook.SheetNames.forEach((name) => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sheetSelect.appendChild(opt);
+  });
+  populateColumnSelects();
+}
+
+sheetSelect.addEventListener('change', populateColumnSelects);
+
+function getHeaders() {
+  const sheet = workbook.Sheets[sheetSelect.value];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  return rows.length ? rows[0].map((h) => String(h).trim()) : [];
+}
+
+function populateColumnSelects() {
+  const headers = getHeaders();
+  [userCol, assistantCol].forEach((sel) => (sel.innerHTML = ''));
+  headers.forEach((h, i) => {
+    const optU = document.createElement('option');
+    optU.value = i;
+    optU.textContent = h || `列 ${i + 1}`;
+    userCol.appendChild(optU);
+    const optA = document.createElement('option');
+    optA.value = i;
+    optA.textContent = h || `列 ${i + 1}`;
+    assistantCol.appendChild(optA);
+  });
+  const userIdx = headers.findIndex((h) => /^user$/i.test(h) || h === '用户' || h === '问题');
+  const assistantIdx = headers.findIndex((h) => /^assistant$/i.test(h) || h === '助手' || h === '回答');
+  userCol.value = userIdx >= 0 ? userIdx : 0;
+  assistantCol.value = assistantIdx >= 0 ? assistantIdx : Math.min(1, headers.length - 1);
+}
+
+convertBtn.addEventListener('click', () => {
+  if (!workbook) return;
+  try {
+    const sheet = workbook.Sheets[sheetSelect.value];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    const uIdx = parseInt(userCol.value, 10);
+    const aIdx = parseInt(assistantCol.value, 10);
+    const dataRows = rows.slice(1);
+
+    const lines = [];
+    for (const row of dataRows) {
+      const userVal = row[uIdx] !== undefined ? String(row[uIdx]).trim() : '';
+      const assistantVal = row[aIdx] !== undefined ? String(row[aIdx]).trim() : '';
+      if (!userVal && !assistantVal) continue;
+      const obj = {
+        messages: [
+          { role: 'user', content: userVal },
+          { role: 'assistant', content: assistantVal }
+        ]
+      };
+      lines.push(JSON.stringify(obj));
+    }
+
+    jsonlText = lines.join('\n');
+    rowCountEl.textContent = `共生成 ${lines.length} 行`;
+    previewEl.textContent = lines.slice(0, 20).join('\n') + (lines.length > 20 ? '\n…' : '');
+    previewCard.classList.remove('hidden');
+    downloadBtn.disabled = lines.length === 0;
+    setStatus(lines.length ? '生成成功，可以下载了。' : '未找到有效数据行。', lines.length ? 'success' : 'error');
+  } catch (err) {
+    setStatus('生成失败：' + err.message, 'error');
+  }
+});
+
+downloadBtn.addEventListener('click', () => {
+  if (!jsonlText) return;
+  const blob = new Blob([jsonlText], { type: 'application/jsonl;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = currentFileName + '.jsonl';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
